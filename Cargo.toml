@@ -31,5 +31,6 @@ opt-level = "s"
 strip = "debuginfo"
 
 [dependencies]
+avian3d = { git = "https://github.com/Jondolf/avian", branch = "main" }
 bevy = "0.16.0"
 log = { version = "*", features = ["max_level_debug", "release_max_level_warn"] }
