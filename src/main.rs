@@ -1,6 +1,7 @@
 mod geometry;
 
 use crate::geometry::create_icosphere;
+use avian3d::parry::na::inf;
 use avian3d::prelude::*;
 use bevy::asset::RenderAssetUsages;
 use bevy::input::common_conditions::input_just_pressed;
@@ -149,7 +150,7 @@ fn collide_and_mark(
     ));
 
     let triangle = meshes.get(&triangle.0).ok_or(Error::default())?;
-    let vertices = Vec::from(
+    let mut vertices = Vec::from(
         triangle
             .attribute(Mesh::ATTRIBUTE_POSITION)
             .and_then(VertexAttributeValues::as_float3)
@@ -157,39 +158,97 @@ fn collide_and_mark(
     );
     let indices = Vec::from_iter(triangle.indices().expect("indices").iter());
 
-    let intersections = intersect_triangle_with_plane(vertices, indices, Vec3::default(), normal);
-    for intersection in intersections {
+    let intersections =
+        intersect_with_plane(vertices.clone(), indices.clone(), Vec3::default(), normal);
+    let mut triangle = Vec::new();
+    for i in 0..3 {
+        // TODO: use cache for vertices -> check if points are equal (very close)
+        if let Some(intersection) = intersections[i] {
+            triangle.push((indices[i], Some(vertices.len())));
+            vertices.push(intersection.to_array());
+        } else {
+            triangle.push((indices[i], None));
+        }
+    }
+    let mut new_indices = Vec::new();
+    for t in 0..3 {
+        let i1 = indices[t];
+        let i2 = if let Some(index) = triangle[t].1 {
+            index
+        } else {
+            triangle[(t + 1) % 3].0
+        };
+        let mut x = (t + 2) % 3;
+        while triangle[x].1 == None {
+            x = (x + 2) % 3;
+        }
+        let i3 = triangle[x].1.expect("index");
+        new_indices.extend([i1, i2, i3]);
+    }
+    info!("triangle: {:?}", triangle);
+    info!("new_indices: {:?}", new_indices);
+
+    let colors = vec![
+        Color::srgb(0.2, 0.2, 0.4),
+        Color::srgb(0.4, 0.2, 0.4),
+        Color::srgb(0.4, 0.4, 0.2),
+    ];
+
+    for i in (0..new_indices.len()).step_by(3) {
+        let indices = vec![
+            new_indices[i] as u16,
+            new_indices[i + 1] as u16,
+            new_indices[i + 2] as u16,
+        ];
+        let color = colors[i / 3];
+        let mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vertices.clone())
+        .with_inserted_indices(Indices::U16(indices))
+        .with_duplicated_vertices()
+        .with_computed_normals();
+
         commands.spawn((
             Marker,
-            Mesh3d(meshes.add(Sphere::new(0.05))),
-            Transform::from_translation(intersection),
-            MeshMaterial3d(materials.add(Color::srgb(0.8, 0.2, 0.8))),
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(materials.add(color)),
         ));
+    }
+
+    for intersection in intersections {
+        if let Some(intersection) = intersection {
+            commands.spawn((
+                Marker,
+                Mesh3d(meshes.add(Sphere::new(0.05))),
+                Transform::from_translation(intersection),
+                MeshMaterial3d(materials.add(Color::srgb(0.8, 0.2, 0.8))),
+            ));
+        }
     }
     Ok(())
 }
 
-fn intersect_triangle_with_plane(
+fn intersect_with_plane(
     vertices: Vec<[f32; 3]>,
     indices: Vec<usize>,
     plane_point: Vec3,
     plane_normal: Vec3,
-) -> Vec<Vec3> {
-    let mut lines = Vec::new();
+) -> Vec<Option<Vec3>> {
+    let mut collisions = Vec::new();
     for index in 0..indices.len() {
         let line = (
             Vec3::from_array(vertices[indices[index]]),
             Vec3::from_array(vertices[indices[(index + 1) % indices.len()]]),
         );
-        lines.push(line);
-    }
-    let mut collisions = Vec::new();
-    for line in lines {
-        if let Some(intersection) = intersect_line_with_plane(line, plane_point, plane_normal) {
-            collisions.push(intersection);
-        }
+        collisions.push(intersect_line_with_plane(line, plane_point, plane_normal));
     }
     collisions
+}
+
+fn are_vertices_too_close(v1: Vec3, v2: Vec3) -> bool {
+    v1.distance(v2) <= f32::EPSILON * 3.0
 }
 
 fn intersect_line_with_plane(
