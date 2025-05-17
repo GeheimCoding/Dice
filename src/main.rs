@@ -73,8 +73,13 @@ fn setup(
         MeshMaterial3d(materials.add(Color::srgb(0.8, 0.0, 0.8))),
     ));
 
-    let vertices = vec![[-1.0, -0.5, 0.0], [1.0, -0.5, 0.0], [0.0, 1.0, 0.0]];
-    let indices = Indices::U16(vec![0, 1, 2]);
+    let vertices = vec![
+        [-1.0, -0.5, 0.0],
+        [1.0, -0.5, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, -1.0, 0.0],
+    ];
+    let indices = Indices::U16(vec![0, 1, 2, 3, 1, 0]);
     let mesh = meshes.add(
         Mesh::new(
             PrimitiveTopology::TriangleList,
@@ -149,11 +154,17 @@ fn collide_and_mark(
             .ok_or(Error::default())?,
     );
     let indices = Vec::from_iter(triangulation.indices().expect("indices").iter());
+    info!(
+        "{} vertices, {} triangles",
+        triangulation.count_vertices(),
+        indices.len() / 3
+    );
 
     let colors = vec![
         Color::srgb(0.2, 0.2, 0.4),
         Color::srgb(0.4, 0.2, 0.4),
         Color::srgb(0.4, 0.4, 0.2),
+        Color::srgb(0.2, 0.4, 0.4),
     ];
     for i in (0..indices.len()).step_by(3) {
         let indices = vec![
@@ -161,7 +172,7 @@ fn collide_and_mark(
             indices[i + 1] as u16,
             indices[i + 2] as u16,
         ];
-        let color = colors[i / 3];
+        let color = colors[(i / 3) % colors.len()];
         let mesh = Mesh::new(
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::default(),

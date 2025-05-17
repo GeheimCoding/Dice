@@ -147,20 +147,18 @@ pub fn intersect_mesh_with_plane(
     let mut new_indices = Vec::new();
 
     for i in (0..indices.len()).step_by(3) {
-        let t_indices = vec![indices[i], indices[i + 1], indices[i + 2]];
-        let t_vertices = t_indices.iter().map(|i| vertices[*i]).collect::<Vec<_>>();
-
+        let triangle_indices = vec![indices[i], indices[i + 1], indices[i + 2]];
         let intersections =
-            intersect_triangle_with_plane(&t_vertices, &t_indices, plane_point, plane_normal);
+            intersect_triangle_with_plane(&vertices, &triangle_indices, plane_point, plane_normal);
         if !needs_triangulation(&intersections) {
-            new_indices.extend(t_indices);
+            new_indices.extend(triangle_indices);
             continue;
         }
 
         let mut triangle = Vec::new();
         for i in 0..3 {
-            let i1 = t_indices[i];
-            let i2 = t_indices[(i + 1) % 3];
+            let i1 = triangle_indices[i];
+            let i2 = triangle_indices[(i + 1) % 3];
             let key = (std::cmp::min(i1, i2), std::cmp::max(i1, i2));
             if let Some(index) = index_cache.get(&key) {
                 triangle.push((i1, Some(*index)));
@@ -177,7 +175,7 @@ pub fn intersect_mesh_with_plane(
             }
         }
         for t in 0..3 {
-            let i1 = t_indices[t];
+            let i1 = triangle_indices[t];
             let i2 = if let Some(index) = triangle[t].1 {
                 index
             } else {
