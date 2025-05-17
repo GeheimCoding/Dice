@@ -1,7 +1,6 @@
 mod geometry;
 
-use crate::geometry::create_icosphere;
-use avian3d::parry::na::inf;
+use crate::geometry::{create_icosphere, intersect_mesh_with_plane};
 use avian3d::prelude::*;
 use bevy::asset::RenderAssetUsages;
 use bevy::input::common_conditions::input_just_pressed;
@@ -126,79 +125,41 @@ fn collide_and_mark(
     query: Query<Entity, With<Marker>>,
     triangle: Res<TriangleMesh>,
 ) -> Result {
+    query.iter().for_each(|e| commands.entity(e).despawn());
+
     let mut rng = rand::rng();
-    let normal = Vec3::new(
+    let plane_point = Vec3::new(
+        rng.random_range(-1.0..1.0),
+        rng.random_range(-1.0..1.0),
+        0.0,
+    );
+    let plane_normal = Vec3::new(
         rng.random_range(-1.0..1.0),
         rng.random_range(-1.0..1.0),
         0.0,
     )
     .normalize();
 
-    let vertices = vec![[0.0, 0.0, 0.0], (normal * 0.2).to_array()];
-    let indices = Indices::U16(vec![0, 1]);
-    let mesh = meshes.add(
-        Mesh::new(PrimitiveTopology::LineList, RenderAssetUsages::default())
-            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![Vec3::Z; vertices.len()])
-            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vertices)
-            .with_inserted_indices(indices),
-    );
-    query.iter().for_each(|e| commands.entity(e).despawn());
-    commands.spawn((
-        Marker,
-        Mesh3d(mesh),
-        MeshMaterial3d(materials.add(Color::WHITE)),
-    ));
-
     let triangle = meshes.get(&triangle.0).ok_or(Error::default())?;
-    let mut vertices = Vec::from(
-        triangle
+    let triangulation = intersect_mesh_with_plane(triangle.clone(), plane_point, plane_normal)?;
+    let vertices = Vec::from(
+        triangulation
             .attribute(Mesh::ATTRIBUTE_POSITION)
             .and_then(VertexAttributeValues::as_float3)
             .ok_or(Error::default())?,
     );
-    let indices = Vec::from_iter(triangle.indices().expect("indices").iter());
-
-    let intersections =
-        intersect_with_plane(vertices.clone(), indices.clone(), Vec3::default(), normal);
-    let mut triangle = Vec::new();
-    for i in 0..3 {
-        // TODO: use cache for vertices -> check if points are equal (very close)
-        if let Some(intersection) = intersections[i] {
-            triangle.push((indices[i], Some(vertices.len())));
-            vertices.push(intersection.to_array());
-        } else {
-            triangle.push((indices[i], None));
-        }
-    }
-    let mut new_indices = Vec::new();
-    for t in 0..3 {
-        let i1 = indices[t];
-        let i2 = if let Some(index) = triangle[t].1 {
-            index
-        } else {
-            triangle[(t + 1) % 3].0
-        };
-        let mut x = (t + 2) % 3;
-        while triangle[x].1 == None {
-            x = (x + 2) % 3;
-        }
-        let i3 = triangle[x].1.expect("index");
-        new_indices.extend([i1, i2, i3]);
-    }
-    info!("triangle: {:?}", triangle);
-    info!("new_indices: {:?}", new_indices);
+    let indices = Vec::from_iter(triangulation.indices().expect("indices").iter());
 
     let colors = vec![
         Color::srgb(0.2, 0.2, 0.4),
         Color::srgb(0.4, 0.2, 0.4),
         Color::srgb(0.4, 0.4, 0.2),
     ];
-
-    for i in (0..new_indices.len()).step_by(3) {
+    for i in (0..indices.len()).step_by(3) {
         let indices = vec![
-            new_indices[i] as u16,
-            new_indices[i + 1] as u16,
-            new_indices[i + 2] as u16,
+            indices[i] as u16,
+            indices[i + 1] as u16,
+            indices[i + 2] as u16,
         ];
         let color = colors[i / 3];
         let mesh = Mesh::new(
@@ -216,54 +177,34 @@ fn collide_and_mark(
             MeshMaterial3d(materials.add(color)),
         ));
     }
+    commands.spawn((
+        Marker,
+        Mesh3d(meshes.add(Sphere::new(0.05))),
+        Transform::from_translation(plane_point),
+        MeshMaterial3d(materials.add(Color::WHITE)),
+    ));
+    let line = vec![[0.0, 0.0, 0.0], (plane_normal * 0.2).to_array()];
+    let indices = Indices::U16(vec![0, 1]);
+    let mesh = meshes.add(
+        Mesh::new(PrimitiveTopology::LineList, RenderAssetUsages::default())
+            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![Vec3::Z; line.len()])
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, line)
+            .with_inserted_indices(indices),
+    );
+    commands.spawn((
+        Marker,
+        Mesh3d(mesh),
+        Transform::from_translation(plane_point.with_z(0.01)),
+        MeshMaterial3d(materials.add(Color::WHITE)),
+    ));
 
-    for intersection in intersections {
-        if let Some(intersection) = intersection {
-            commands.spawn((
-                Marker,
-                Mesh3d(meshes.add(Sphere::new(0.05))),
-                Transform::from_translation(intersection),
-                MeshMaterial3d(materials.add(Color::srgb(0.8, 0.2, 0.8))),
-            ));
-        }
+    for vertex in vertices {
+        commands.spawn((
+            Marker,
+            Mesh3d(meshes.add(Sphere::new(0.03))),
+            Transform::from_translation(Vec3::from_array(vertex)),
+            MeshMaterial3d(materials.add(Color::BLACK)),
+        ));
     }
     Ok(())
-}
-
-fn intersect_with_plane(
-    vertices: Vec<[f32; 3]>,
-    indices: Vec<usize>,
-    plane_point: Vec3,
-    plane_normal: Vec3,
-) -> Vec<Option<Vec3>> {
-    let mut collisions = Vec::new();
-    for index in 0..indices.len() {
-        let line = (
-            Vec3::from_array(vertices[indices[index]]),
-            Vec3::from_array(vertices[indices[(index + 1) % indices.len()]]),
-        );
-        collisions.push(intersect_line_with_plane(line, plane_point, plane_normal));
-    }
-    collisions
-}
-
-fn are_vertices_too_close(v1: Vec3, v2: Vec3) -> bool {
-    v1.distance(v2) <= f32::EPSILON * 3.0
-}
-
-fn intersect_line_with_plane(
-    (l1, l2): (Vec3, Vec3),
-    plane_point: Vec3,
-    plane_normal: Vec3,
-) -> Option<Vec3> {
-    let line = l2 - l1;
-    let dot = plane_normal.dot(line);
-    if dot.abs() <= f32::EPSILON {
-        return None;
-    }
-    let factor = plane_normal.dot(l1 - plane_point) / -dot;
-    if factor < 0.0 || factor > 1.0 {
-        return None;
-    }
-    Some(l1 + line * factor)
 }
