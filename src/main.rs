@@ -6,8 +6,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::input::common_conditions::input_just_pressed;
 use bevy::pbr::wireframe::{Wireframe, WireframePlugin};
 use bevy::prelude::*;
-use bevy::render::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
-use rand::Rng;
+use bevy::render::mesh::{Indices, PrimitiveTopology};
 use std::fmt::Error;
 
 #[derive(Component)]
@@ -17,7 +16,7 @@ struct Spinnable;
 struct Marker;
 
 #[derive(Resource)]
-struct TriangleMesh(Handle<Mesh>);
+struct SphereMesh(Handle<Mesh>);
 
 fn main() {
     App::new()
@@ -55,11 +54,14 @@ fn setup(
     info!("{}", icosphere.count_vertices());
     info!("{}", sphere.count_vertices());
 
+    let icosphere = meshes.add(icosphere);
+    commands.insert_resource(SphereMesh(icosphere.clone()));
+
     commands.spawn((
         Spinnable,
         Wireframe,
         Visibility::Hidden,
-        Mesh3d(meshes.add(icosphere)),
+        Mesh3d(icosphere),
         Transform::from_xyz(-1.2, 0.0, 0.0),
         MeshMaterial3d(materials.add(Color::srgb(0.0, 0.8, 0.8))),
     ));
@@ -89,8 +91,7 @@ fn setup(
         .with_inserted_indices(indices)
         .with_computed_normals(),
     );
-    commands.insert_resource(TriangleMesh(mesh.clone()));
-    commands.spawn((Wireframe, Mesh3d(mesh)));
+    commands.spawn((Visibility::Hidden, Wireframe, Mesh3d(mesh)));
 
     commands.spawn((
         PointLight {
@@ -128,95 +129,22 @@ fn collide_and_mark(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     query: Query<Entity, With<Marker>>,
-    triangle: Res<TriangleMesh>,
+    triangle: Res<SphereMesh>,
 ) -> Result {
     query.iter().for_each(|e| commands.entity(e).despawn());
 
-    let mut rng = rand::rng();
-    let plane_point = Vec3::new(
-        rng.random_range(-1.0..1.0),
-        rng.random_range(-1.0..1.0),
-        0.0,
-    );
-    let plane_normal = Vec3::new(
-        rng.random_range(-1.0..1.0),
-        rng.random_range(-1.0..1.0),
-        0.0,
-    )
-    .normalize();
-
-    let triangle = meshes.get(&triangle.0).ok_or(Error::default())?;
-    let triangulation = intersect_mesh_with_plane(triangle.clone(), plane_point, plane_normal)?;
-    let triangulation = remove_if(triangulation, |[_, y, _]| y <= -1.0);
-    let vertices = Vec::from(
-        triangulation
-            .attribute(Mesh::ATTRIBUTE_POSITION)
-            .and_then(VertexAttributeValues::as_float3)
-            .ok_or(Error::default())?,
-    );
-    let indices = Vec::from_iter(triangulation.indices().expect("indices").iter());
-    info!(
-        "{} vertices, {} triangles",
-        triangulation.count_vertices(),
-        indices.len() / 3
-    );
-
-    let colors = vec![
-        Color::srgb(0.2, 0.2, 0.4),
-        Color::srgb(0.4, 0.2, 0.4),
-        Color::srgb(0.4, 0.4, 0.2),
-        Color::srgb(0.2, 0.4, 0.4),
-    ];
-    for i in (0..indices.len()).step_by(3) {
-        let indices = vec![
-            indices[i] as u16,
-            indices[i + 1] as u16,
-            indices[i + 2] as u16,
-        ];
-        let color = colors[(i / 3) % colors.len()];
-        let mesh = Mesh::new(
-            PrimitiveTopology::TriangleList,
-            RenderAssetUsages::default(),
-        )
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vertices.clone())
-        .with_inserted_indices(Indices::U16(indices))
-        .with_duplicated_vertices()
-        .with_computed_normals();
-
-        commands.spawn((
-            Marker,
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(materials.add(color)),
-        ));
+    const THRESHOLD: f32 = 0.75;
+    let mut die = meshes.get(&triangle.0).ok_or(Error::default())?.clone();
+    let normals = vec![-Vec3::X, Vec3::X, -Vec3::Y, Vec3::Y, -Vec3::Z, Vec3::Z];
+    for normal in normals {
+        die = intersect_mesh_with_plane(die, normal * THRESHOLD, normal)?;
     }
+    let mesh = remove_if(die, |vertex| vertex.iter().any(|c| c.abs() > THRESHOLD));
     commands.spawn((
         Marker,
-        Mesh3d(meshes.add(Sphere::new(0.05))),
-        Transform::from_translation(plane_point),
-        MeshMaterial3d(materials.add(Color::WHITE)),
+        Spinnable,
+        Mesh3d(meshes.add(mesh.with_computed_normals())),
+        MeshMaterial3d(materials.add(Color::srgb(0.0, 0.8, 0.8))),
     ));
-    let line = vec![[0.0, 0.0, 0.0], (plane_normal * 0.2).to_array()];
-    let indices = Indices::U16(vec![0, 1]);
-    let mesh = meshes.add(
-        Mesh::new(PrimitiveTopology::LineList, RenderAssetUsages::default())
-            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![Vec3::Z; line.len()])
-            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, line)
-            .with_inserted_indices(indices),
-    );
-    commands.spawn((
-        Marker,
-        Mesh3d(mesh),
-        Transform::from_translation(plane_point.with_z(0.01)),
-        MeshMaterial3d(materials.add(Color::WHITE)),
-    ));
-
-    for vertex in vertices {
-        commands.spawn((
-            Marker,
-            Mesh3d(meshes.add(Sphere::new(0.03))),
-            Transform::from_translation(Vec3::from_array(vertex)),
-            MeshMaterial3d(materials.add(Color::BLACK)),
-        ));
-    }
     Ok(())
 }
