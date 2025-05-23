@@ -1,6 +1,6 @@
 mod geometry;
 
-use crate::geometry::{create_icosphere, intersect_mesh_with_plane};
+use crate::geometry::{create_icosphere, intersect_mesh_with_plane, remove_if};
 use avian3d::prelude::*;
 use bevy::asset::RenderAssetUsages;
 use bevy::input::common_conditions::input_just_pressed;
@@ -147,6 +147,7 @@ fn collide_and_mark(
 
     let triangle = meshes.get(&triangle.0).ok_or(Error::default())?;
     let triangulation = intersect_mesh_with_plane(triangle.clone(), plane_point, plane_normal)?;
+    let triangulation = remove_if(triangulation, |[_, y, _]| y <= -1.0);
     let vertices = Vec::from(
         triangulation
             .attribute(Mesh::ATTRIBUTE_POSITION)

@@ -1,7 +1,7 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Error;
 
 pub fn create_icosphere(iterations: u8) -> Mesh {
@@ -236,4 +236,42 @@ fn intersect_line_with_plane(
 
 fn needs_triangulation(collisions: &[Option<Vec3>]) -> bool {
     collisions.iter().filter(|c| c.is_some()).count() > 1
+}
+
+pub fn remove_if(mesh: Mesh, predicate: fn(Vertex) -> bool) -> Mesh {
+    let vertices = Vec::from(
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+            .and_then(VertexAttributeValues::as_float3)
+            .expect("vertices"),
+    );
+    let indices = Vec::from_iter(mesh.indices().expect("indices").iter());
+    let mut index_offsets = vec![];
+    let mut new_vertices = vec![];
+    let mut new_indices = vec![];
+    let mut removed = HashSet::new();
+
+    for v in 0..vertices.len() {
+        let vertex = vertices[v];
+        if predicate(vertex) {
+            removed.insert(v);
+        } else {
+            new_vertices.push(vertex);
+        }
+        index_offsets.push(removed.len());
+    }
+    for i in (0..indices.len()).step_by(3) {
+        let indices = vec![indices[i], indices[i + 1], indices[i + 2]];
+        if indices.iter().all(|i| !removed.contains(i)) {
+            new_indices.extend(indices.iter().map(|i| i - index_offsets[*i]));
+        }
+    }
+
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, new_vertices)
+    .with_inserted_indices(Indices::U32(
+        new_indices.iter().map(|i| *i as u32).collect(),
+    ))
 }
