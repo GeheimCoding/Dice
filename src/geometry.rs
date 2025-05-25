@@ -8,14 +8,11 @@ pub fn create_icosphere(iterations: u8) -> Mesh {
     assert!(iterations <= 8, "iterations must be between 0 and 8");
 
     let icosahedron = generate_regular_icosahedron();
-    let mut vertices = icosahedron
-        .attribute(Mesh::ATTRIBUTE_POSITION)
-        .and_then(VertexAttributeValues::as_float3)
-        .expect("vertices")
+    let (vertices, mut indices) = extract_mesh_attributes(&icosahedron).expect("valid mesh");
+    let mut vertices = vertices
         .iter()
         .map(project_to_unit_circle)
         .collect::<Vec<_>>();
-    let mut indices = Vec::from_iter(icosahedron.indices().expect("indices").iter());
 
     for _ in 0..iterations {
         let mut new_indices = Vec::new();
@@ -36,14 +33,7 @@ pub fn create_icosphere(iterations: u8) -> Mesh {
 
         indices = new_indices;
     }
-    Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vertices)
-    .with_inserted_indices(Indices::U32(
-        indices.iter().map(|i| *i as u32).collect::<Vec<u32>>(),
-    ))
+    construct_mesh(vertices, indices)
 }
 
 type Vertex = [f32; 3];
@@ -132,17 +122,31 @@ pub fn generate_regular_icosahedron() -> Mesh {
     ))
 }
 
-pub fn intersect_mesh_with_plane(
-    mesh: Mesh,
-    plane_point: Vec3,
-    plane_normal: Vec3,
-) -> Result<Mesh> {
-    let mut vertices = Vec::from(
-        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-            .and_then(VertexAttributeValues::as_float3)
-            .ok_or(Error::default())?,
-    );
-    let indices = Vec::from_iter(mesh.indices().ok_or(Error::default())?.iter());
+pub fn create_d6(depth: u8, threshold: f32) -> Mesh {
+    let mut d6 = create_icosphere(depth);
+    let orientations = vec![
+        (Vec3::NEG_X, Vec3::Z, Vec3::NEG_Y), // left
+        (Vec3::X, Vec3::Z, Vec3::Y),         // right
+        (Vec3::Y, Vec3::NEG_Z, Vec3::X),     // up
+        (Vec3::NEG_Y, Vec3::Z, Vec3::X),     // down
+        (Vec3::Z, Vec3::Y, Vec3::X),         // front
+        (Vec3::NEG_Z, Vec3::Y, Vec3::NEG_X), // back
+    ];
+    for (plane_normal, reference, clockwise_normal) in orientations {
+        let center = plane_normal * threshold;
+        let circle_start_index = d6.count_vertices();
+        d6 = intersect_mesh_with_plane(d6, center, plane_normal).expect("valid mesh");
+        d6 = fill_circle(
+            d6,
+            (center, reference, clockwise_normal),
+            circle_start_index,
+        );
+    }
+    remove_if(d6, |vertex| vertex.iter().any(|c| c.abs() > threshold)).with_computed_normals()
+}
+
+fn intersect_mesh_with_plane(mesh: Mesh, plane_point: Vec3, plane_normal: Vec3) -> Result<Mesh> {
+    let (mut vertices, indices) = extract_mesh_attributes(&mesh).ok_or(Error::default())?;
     let mut index_cache = HashMap::new();
     let mut new_indices = Vec::new();
 
@@ -189,15 +193,7 @@ pub fn intersect_mesh_with_plane(
             new_indices.extend([i1, i2, i3]);
         }
     }
-    let mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vertices)
-    .with_inserted_indices(Indices::U32(
-        new_indices.iter().map(|i| *i as u32).collect(),
-    ));
-    Ok(mesh)
+    Ok(construct_mesh(vertices, new_indices))
 }
 
 fn intersect_triangle_with_plane(
@@ -238,13 +234,8 @@ fn needs_triangulation(collisions: &[Option<Vec3>]) -> bool {
     collisions.iter().filter(|c| c.is_some()).count() > 1
 }
 
-pub fn remove_if(mesh: Mesh, predicate: fn(Vertex) -> bool) -> Mesh {
-    let vertices = Vec::from(
-        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-            .and_then(VertexAttributeValues::as_float3)
-            .expect("vertices"),
-    );
-    let indices = Vec::from_iter(mesh.indices().expect("indices").iter());
+fn remove_if<Predicate: Fn(Vertex) -> bool>(mesh: Mesh, predicate: Predicate) -> Mesh {
+    let (vertices, indices) = extract_mesh_attributes(&mesh).expect("valid mesh");
     let mut index_offsets = vec![];
     let mut new_vertices = vec![];
     let mut new_indices = vec![];
@@ -265,13 +256,69 @@ pub fn remove_if(mesh: Mesh, predicate: fn(Vertex) -> bool) -> Mesh {
             new_indices.extend(indices.iter().map(|i| i - index_offsets[*i]));
         }
     }
+    construct_mesh(new_vertices, new_indices)
+}
 
+fn fill_circle(
+    mesh: Mesh,
+    (center, reference, clockwise_normal): (Vec3, Vec3, Vec3),
+    mut start_index: usize,
+) -> Mesh {
+    let reference = center + reference;
+    let (mut clockwise, mut counter) = (vec![], vec![]);
+    let (mut vertices, mut indices) = extract_mesh_attributes(&mesh).expect("valid mesh");
+
+    let len = vertices.len();
+    for i in start_index..len {
+        vertices.push(vertices[i]);
+        start_index = i + 1;
+    }
+    for index in start_index..vertices.len() {
+        let vertex = Vec3::from_array(vertices[index]);
+        if vertex.distance(center + clockwise_normal) < vertex.distance(center - clockwise_normal) {
+            clockwise.push(index);
+        } else {
+            counter.push(index);
+        }
+    }
+    let sort_by_angle = |a, b| {
+        reference
+            .angle_between(Vec3::from_array(vertices[a]))
+            .partial_cmp(&reference.angle_between(Vec3::from_array(vertices[b])))
+            .expect("comparable")
+    };
+    clockwise.sort_by(|a, b| sort_by_angle(*b, *a));
+    counter.sort_by(|a, b| sort_by_angle(*a, *b));
+
+    let mut sorted_indices = counter;
+    sorted_indices.extend(clockwise);
+
+    let center_index = vertices.len();
+    vertices.push(center.to_array());
+
+    for i in 0..sorted_indices.len() {
+        let v1 = sorted_indices[i];
+        let v2 = sorted_indices[(i + 1) % sorted_indices.len()];
+        indices.extend([v1, v2, center_index]);
+    }
+    construct_mesh(vertices, indices)
+}
+
+fn extract_mesh_attributes(mesh: &Mesh) -> Option<(Vec<Vertex>, Vec<usize>)> {
+    Some((
+        Vec::from(
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+                .and_then(VertexAttributeValues::as_float3)?,
+        ),
+        Vec::from_iter(mesh.indices()?.iter()),
+    ))
+}
+
+fn construct_mesh(vertices: Vec<Vertex>, indices: Vec<usize>) -> Mesh {
     Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, new_vertices)
-    .with_inserted_indices(Indices::U32(
-        new_indices.iter().map(|i| *i as u32).collect(),
-    ))
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vertices)
+    .with_inserted_indices(Indices::U32(indices.iter().map(|i| *i as u32).collect()))
 }
