@@ -122,7 +122,7 @@ pub fn generate_regular_icosahedron() -> Mesh {
     ))
 }
 
-pub fn create_d6(depth: u8, threshold: f32) -> Mesh {
+pub fn create_d6(depth: u8, threshold: f32, size: f32) -> Mesh {
     let mut d6 = create_icosphere(depth);
     let orientations = vec![
         (Vec3::NEG_X, Vec3::Z, Vec3::NEG_Y), // left
@@ -142,7 +142,16 @@ pub fn create_d6(depth: u8, threshold: f32) -> Mesh {
             circle_start_index,
         );
     }
-    remove_if(d6, |vertex| vertex.iter().any(|c| c.abs() > threshold)).with_computed_normals()
+    d6 = remove_if(d6, |vertex| vertex.iter().any(|c| c.abs() > threshold));
+    let (vertices, indices) = extract_mesh_attributes(&d6).expect("valid mesh");
+
+    let scale_factor = size / (2.0 * threshold);
+    let scaled_vertices = vertices
+        .iter()
+        .map(|[x, y, z]| [x * scale_factor, y * scale_factor, z * scale_factor])
+        .collect::<Vec<_>>();
+
+    construct_mesh(scaled_vertices, indices).with_computed_normals()
 }
 
 fn intersect_mesh_with_plane(mesh: Mesh, plane_point: Vec3, plane_normal: Vec3) -> Result<Mesh> {

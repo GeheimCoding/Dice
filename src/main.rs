@@ -31,7 +31,7 @@ fn setup(
 ) {
     commands.spawn((
         Spinnable,
-        Mesh3d(meshes.add(create_d6(5, 0.72))),
+        Mesh3d(meshes.add(create_d6(5, 0.72, 1.0))),
         MeshMaterial3d(materials.add(Color::srgb(0.0, 0.8, 0.8))),
     ));
     commands.spawn((
