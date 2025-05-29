@@ -14,7 +14,7 @@ struct Spinnable(Vec3);
 struct Die;
 
 #[derive(Resource)]
-struct D6((Handle<Mesh>, Collider));
+struct D6((Handle<Mesh>, Handle<Image>, Collider));
 
 fn main() {
     App::new()
@@ -45,6 +45,7 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
 ) {
     commands.spawn((
         RigidBody::Static,
@@ -61,7 +62,7 @@ fn setup(
         },
     )
     .expect("collider");
-    commands.insert_resource(D6((meshes.add(d6), collider)));
+    commands.insert_resource(D6((meshes.add(d6), asset_server.load("d6.png"), collider)));
     commands.spawn((
         PointLight {
             shadows_enabled: true,
@@ -122,11 +123,15 @@ fn spawn_cube(
         LinearDamping(2.0),
         AngularDamping(0.5),
         Restitution::new(0.4),
-        d6_mesh.0.1.clone(),
-        Transform::from_xyz(0.0, 4.0, 0.0),
         AngularVelocity(angular_velocity * 8.0),
         Mesh3d(d6_mesh.0.0.clone()),
-        MeshMaterial3d(materials.add(color)),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color_texture: Some(d6_mesh.0.1.clone()),
+            base_color: color,
+            ..default()
+        })),
+        d6_mesh.0.2.clone(),
+        Transform::from_xyz(0.0, 4.0, 0.0),
     ));
 }
 

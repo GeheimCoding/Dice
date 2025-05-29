@@ -1,4 +1,5 @@
 use bevy::asset::RenderAssetUsages;
+use bevy::prelude::ops::{cos, sin};
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use std::collections::{HashMap, HashSet};
@@ -15,7 +16,7 @@ pub fn create_icosphere(iterations: u8) -> Mesh {
         .collect::<Vec<_>>();
 
     for _ in 0..iterations {
-        let mut new_indices = Vec::new();
+        let mut new_indices = vec![];
         let mut index_cache = HashMap::new();
 
         for i in (0..indices.len()).step_by(3) {
@@ -125,24 +126,35 @@ pub fn generate_regular_icosahedron() -> Mesh {
 pub fn create_d6(depth: u8, threshold: f32, size: f32) -> Mesh {
     let mut d6 = create_icosphere(depth);
     let orientations = vec![
-        (Vec3::NEG_X, Vec3::Z, Vec3::NEG_Y), // left
-        (Vec3::X, Vec3::Z, Vec3::Y),         // right
-        (Vec3::Y, Vec3::NEG_Z, Vec3::X),     // up
-        (Vec3::NEG_Y, Vec3::Z, Vec3::X),     // down
-        (Vec3::Z, Vec3::Y, Vec3::X),         // front
-        (Vec3::NEG_Z, Vec3::Y, Vec3::NEG_X), // back
+        (2, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Y), // left
+        (5, Vec3::X, Vec3::Z, Vec3::Y),         // right
+        (6, Vec3::Y, Vec3::NEG_Z, Vec3::X),     // up
+        (1, Vec3::NEG_Y, Vec3::Z, Vec3::X),     // down
+        (4, Vec3::Z, Vec3::Y, Vec3::X),         // front
+        (3, Vec3::NEG_Z, Vec3::Y, Vec3::NEG_X), // back
     ];
-    for (plane_normal, reference, clockwise_normal) in orientations {
+    let mut uvs = vec![[0.0, 0.0]; d6.count_vertices()];
+    for (die_face, plane_normal, reference, clockwise_normal) in orientations {
         let center = plane_normal * threshold;
         let circle_start_index = d6.count_vertices();
         d6 = intersect_mesh_with_plane(d6, center, plane_normal).expect("valid mesh");
+        let circle_count = d6.count_vertices() - circle_start_index;
+        uvs.extend(vec![[0.0, 0.0]; circle_count]);
         d6 = fill_circle(
             d6,
-            (center, reference, clockwise_normal),
+            (center, reference * threshold, clockwise_normal * threshold),
             circle_start_index,
+            &mut uvs,
         );
+        for i in uvs.len() - circle_count - 1..uvs.len() {
+            uvs[i][0] = (die_face - 1) as f32 * 1.0 / 6.0 + uvs[i][0] / 6.0;
+        }
     }
-    d6 = remove_if(d6, |vertex| vertex.iter().any(|c| c.abs() > threshold));
+    d6 = remove_if(
+        d6,
+        |vertex| vertex.iter().any(|c| c.abs() > threshold),
+        &mut uvs,
+    );
     let (vertices, indices) = extract_mesh_attributes(&d6).expect("valid mesh");
 
     let scale_factor = size / (2.0 * threshold);
@@ -151,13 +163,15 @@ pub fn create_d6(depth: u8, threshold: f32, size: f32) -> Mesh {
         .map(|[x, y, z]| [x * scale_factor, y * scale_factor, z * scale_factor])
         .collect::<Vec<_>>();
 
-    construct_mesh(scaled_vertices, indices).with_computed_normals()
+    construct_mesh(scaled_vertices, indices)
+        .with_computed_normals()
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
 }
 
 fn intersect_mesh_with_plane(mesh: Mesh, plane_point: Vec3, plane_normal: Vec3) -> Result<Mesh> {
     let (mut vertices, indices) = extract_mesh_attributes(&mesh).ok_or(Error::default())?;
     let mut index_cache = HashMap::new();
-    let mut new_indices = Vec::new();
+    let mut new_indices = vec![];
 
     for i in (0..indices.len()).step_by(3) {
         let triangle_indices = vec![indices[i], indices[i + 1], indices[i + 2]];
@@ -168,7 +182,7 @@ fn intersect_mesh_with_plane(mesh: Mesh, plane_point: Vec3, plane_normal: Vec3) 
             continue;
         }
 
-        let mut triangle = Vec::new();
+        let mut triangle = vec![];
         for i in 0..3 {
             let i1 = triangle_indices[i];
             let i2 = triangle_indices[(i + 1) % 3];
@@ -211,7 +225,7 @@ fn intersect_triangle_with_plane(
     plane_point: Vec3,
     plane_normal: Vec3,
 ) -> Vec<Option<Vec3>> {
-    let mut collisions = Vec::new();
+    let mut collisions = vec![];
     for index in 0..indices.len() {
         let line = (
             Vec3::from_array(vertices[indices[index]]),
@@ -243,22 +257,29 @@ fn needs_triangulation(collisions: &[Option<Vec3>]) -> bool {
     collisions.iter().filter(|c| c.is_some()).count() > 1
 }
 
-fn remove_if<Predicate: Fn(Vertex) -> bool>(mesh: Mesh, predicate: Predicate) -> Mesh {
+fn remove_if<Predicate: Fn(Vertex) -> bool>(
+    mesh: Mesh,
+    predicate: Predicate,
+    uvs: &mut Vec<[f32; 2]>,
+) -> Mesh {
     let (vertices, indices) = extract_mesh_attributes(&mesh).expect("valid mesh");
     let mut index_offsets = vec![];
     let mut new_vertices = vec![];
     let mut new_indices = vec![];
     let mut removed = HashSet::new();
 
+    let mut new_uvs = vec![];
     for v in 0..vertices.len() {
         let vertex = vertices[v];
         if predicate(vertex) {
             removed.insert(v);
         } else {
             new_vertices.push(vertex);
+            new_uvs.push(uvs[v]);
         }
         index_offsets.push(removed.len());
     }
+    *uvs = new_uvs;
     for i in (0..indices.len()).step_by(3) {
         let indices = vec![indices[i], indices[i + 1], indices[i + 2]];
         if indices.iter().all(|i| !removed.contains(i)) {
@@ -272,6 +293,7 @@ fn fill_circle(
     mesh: Mesh,
     (center, reference, clockwise_normal): (Vec3, Vec3, Vec3),
     mut start_index: usize,
+    uvs: &mut Vec<[f32; 2]>,
 ) -> Mesh {
     let reference = center + reference;
     let (mut clockwise, mut counter) = (vec![], vec![]);
@@ -280,6 +302,7 @@ fn fill_circle(
     let len = vertices.len();
     for i in start_index..len {
         vertices.push(vertices[i]);
+        uvs.push([0.0, 0.0]);
         start_index = i + 1;
     }
     for index in start_index..vertices.len() {
@@ -299,17 +322,25 @@ fn fill_circle(
     clockwise.sort_by(|a, b| sort_by_angle(*b, *a));
     counter.sort_by(|a, b| sort_by_angle(*a, *b));
 
+    let counter_len = counter.len();
     let mut sorted_indices = counter;
     sorted_indices.extend(clockwise);
 
     let center_index = vertices.len();
-    vertices.push(center.to_array());
-
     for i in 0..sorted_indices.len() {
         let v1 = sorted_indices[i];
         let v2 = sorted_indices[(i + 1) % sorted_indices.len()];
         indices.extend([v1, v2, center_index]);
+
+        let mut angle = (reference - center).angle_between(Vec3::from_array(vertices[v1]) - center);
+        if i >= counter_len {
+            angle = 2.0 * std::f32::consts::PI - angle;
+        }
+        uvs[v1] = [(-sin(angle) + 1.0) / 2.0, 1.0 - (cos(angle) + 1.0) / 2.0];
     }
+    vertices.push(center.to_array());
+    uvs.push([0.5, 0.5]);
+
     construct_mesh(vertices, indices)
 }
 
