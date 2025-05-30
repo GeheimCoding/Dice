@@ -2,6 +2,7 @@ mod geometry;
 
 use crate::geometry::create_d6;
 use avian3d::prelude::*;
+use bevy::image::ImageLoaderSettings;
 use bevy::input::common_conditions::input_just_pressed;
 use bevy::pbr::PointLightShadowMap;
 use bevy::prelude::*;
@@ -14,7 +15,13 @@ struct Spinnable(Vec3);
 struct Die;
 
 #[derive(Resource)]
-struct D6((Handle<Mesh>, Handle<Image>, Collider));
+struct D6 {
+    mesh: Handle<Mesh>,
+    collider: Collider,
+    color_texture: Handle<Image>,
+    depth_texture: Handle<Image>,
+    normal_texture: Handle<Image>,
+}
 
 fn main() {
     App::new()
@@ -62,7 +69,16 @@ fn setup(
         },
     )
     .expect("collider");
-    commands.insert_resource(D6((meshes.add(d6), asset_server.load("d6.png"), collider)));
+    commands.insert_resource(D6 {
+        mesh: meshes.add(d6),
+        collider,
+        color_texture: asset_server.load("d6.png"),
+        depth_texture: asset_server.load("d6_depth.png"),
+        normal_texture: asset_server
+            .load_with_settings("d6_normal.png", |settings: &mut ImageLoaderSettings| {
+                settings.is_srgb = false
+            }),
+    });
     commands.spawn((
         PointLight {
             shadows_enabled: true,
@@ -71,6 +87,7 @@ fn setup(
         Transform::from_xyz(4.0, 8.0, 4.0),
     ));
     commands.spawn((
+        Msaa::Sample8,
         Camera3d::default(),
         Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Dir3::Y),
     ));
@@ -97,7 +114,7 @@ fn spin(
 fn spawn_cube(
     mut commands: Commands,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    d6_mesh: Res<D6>,
+    d6: Res<D6>,
 ) {
     let mut rng = rand::rng();
     let angular_velocity = Vec3::new(
@@ -124,13 +141,17 @@ fn spawn_cube(
         AngularDamping(0.5),
         Restitution::new(0.4),
         AngularVelocity(angular_velocity * 8.0),
-        Mesh3d(d6_mesh.0.0.clone()),
+        Mesh3d(d6.mesh.clone()),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color_texture: Some(d6_mesh.0.1.clone()),
+            normal_map_texture: Some(d6.normal_texture.clone()),
+            base_color_texture: Some(d6.color_texture.clone()),
+            depth_map: Some(d6.depth_texture.clone()),
+            parallax_depth_scale: 0.008,
+            perceptual_roughness: 0.8,
             base_color: color,
             ..default()
         })),
-        d6_mesh.0.2.clone(),
+        d6.collider.clone(),
         Transform::from_xyz(0.0, 4.0, 0.0),
     ));
 }

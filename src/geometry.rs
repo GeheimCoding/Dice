@@ -166,6 +166,8 @@ pub fn create_d6(depth: u8, threshold: f32, size: f32) -> Mesh {
     construct_mesh(scaled_vertices, indices)
         .with_computed_normals()
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_generated_tangents()
+        .expect("generated tangents")
 }
 
 fn intersect_mesh_with_plane(mesh: Mesh, plane_point: Vec3, plane_normal: Vec3) -> Result<Mesh> {
