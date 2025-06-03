@@ -42,6 +42,7 @@ fn main() {
             (
                 spin,
                 spawn_cube.run_if(input_just_pressed(KeyCode::Enter)),
+                count_faces.run_if(input_just_pressed(KeyCode::KeyC)),
                 clear_dice.run_if(input_just_pressed(KeyCode::Backspace)),
             ),
         )
@@ -160,4 +161,27 @@ fn clear_dice(mut commands: Commands, query: Query<Entity, With<Die>>) {
     for entity in query.iter() {
         commands.entity(entity).despawn();
     }
+}
+
+fn count_faces(query: Query<&Transform, With<Die>>) {
+    let mut total_count = 0;
+    for transform in query.iter() {
+        let sides = vec![
+            (transform.left(), 2),
+            (transform.right(), 5),
+            (transform.up(), 6),
+            (transform.down(), 1),
+            (transform.forward(), 3),
+            (transform.back(), 4),
+        ];
+        if let Some((_, face)) = sides.iter().max_by(|lhs, rhs| {
+            lhs.0
+                .dot(Vec3::Y)
+                .partial_cmp(&rhs.0.dot(Vec3::Y))
+                .expect("comparable")
+        }) {
+            total_count += face;
+        }
+    }
+    info!("{total_count}");
 }
