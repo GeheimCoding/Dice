@@ -55,8 +55,9 @@ fn main() {
             Update,
             (
                 spin,
-                move_cup,
-                follow_mouse,
+                move_cup_with_mouse,
+                move_cup_vertically,
+                roll_cup_towards_center,
                 spawn_cube.run_if(input_just_pressed(KeyCode::Enter)),
                 count_faces.run_if(input_just_pressed(KeyCode::KeyC)),
                 clear_dice.run_if(input_just_pressed(KeyCode::Backspace)),
@@ -74,8 +75,8 @@ fn setup(
     commands.spawn((
         Ground,
         RigidBody::Static,
-        Collider::cylinder(5.0, 0.2),
-        Mesh3d(meshes.add(Cylinder::new(5.0, 0.2))),
+        Collider::cylinder(6.0, 0.2),
+        Mesh3d(meshes.add(Cylinder::new(6.0, 0.2))),
         MeshMaterial3d(materials.add(Color::WHITE)),
     ));
     let d6 = create_d6(4, 0.72, 0.6);
@@ -108,7 +109,7 @@ fn setup(
     commands.spawn((
         Msaa::Sample8,
         Camera3d::default(),
-        Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Dir3::Y),
+        Transform::from_xyz(-2.5, 7.0, 13.0).looking_at(Vec3::ZERO, Dir3::Y),
     ));
 
     let cup = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Cup.glb#Scene0"));
@@ -162,11 +163,9 @@ fn spawn_cube(
     );
     commands.spawn((
         Die,
-        Spinnable(spin * 600.0),
+        Spinnable(spin * 800.0),
         RigidBody::Dynamic,
-        GravityScale(10.0),
-        LinearDamping(2.0),
-        AngularDamping(0.5),
+        GravityScale(20.0),
         TransformInterpolation,
         Restitution::new(0.4),
         AngularVelocity(angular_velocity * 8.0),
@@ -214,51 +213,21 @@ fn count_faces(query: Query<&Transform, With<Die>>) {
     info!("{total_count}");
 }
 
-fn move_cup(
-    mut query: Query<(&mut LinearVelocity, &mut AngularVelocity), With<Cup>>,
-    input: Res<ButtonInput<KeyCode>>,
+fn move_cup_vertically(
+    mut linear_velocity: Single<&mut LinearVelocity, With<Cup>>,
+    input: Res<ButtonInput<MouseButton>>,
     time: Res<Time>,
 ) {
-    let (mut linear, mut angular) = query.single_mut().expect("cup");
-    let movement_speed = 400.0;
-    let rotation_speed = 300.0;
-
-    **angular = Vec3::ZERO;
-
-    if input.pressed(KeyCode::KeyA) {
-        linear.x -= movement_speed * time.delta_secs();
+    let movement_speed = 400.0 * time.delta_secs();
+    if input.pressed(MouseButton::Right) {
+        linear_velocity.y -= movement_speed;
     }
-    if input.pressed(KeyCode::KeyD) {
-        linear.x += movement_speed * time.delta_secs();
-    }
-    if input.pressed(KeyCode::KeyW) {
-        linear.z -= movement_speed * time.delta_secs();
-    }
-    if input.pressed(KeyCode::KeyS) {
-        linear.z += movement_speed * time.delta_secs();
-    }
-    if input.pressed(KeyCode::KeyQ) {
-        linear.y -= movement_speed * time.delta_secs();
-    }
-    if input.pressed(KeyCode::KeyE) {
-        linear.y += movement_speed * time.delta_secs();
-    }
-
-    if input.pressed(KeyCode::ArrowLeft) {
-        angular.x -= rotation_speed * time.delta_secs();
-    }
-    if input.pressed(KeyCode::ArrowRight) {
-        angular.x += rotation_speed * time.delta_secs();
-    }
-    if input.pressed(KeyCode::ArrowUp) {
-        angular.z -= rotation_speed * time.delta_secs();
-    }
-    if input.pressed(KeyCode::ArrowDown) {
-        angular.z += rotation_speed * time.delta_secs();
+    if input.pressed(MouseButton::Left) {
+        linear_velocity.y += movement_speed;
     }
 }
 
-fn follow_mouse(
+fn move_cup_with_mouse(
     window: Single<&Window>,
     camera: Single<(&Camera, &GlobalTransform)>,
     ground: Single<&GlobalTransform, With<Ground>>,
@@ -285,6 +254,23 @@ fn follow_mouse(
     let move_towards = target_point - translation;
     let distance = translation.distance(target_point);
     linear_velocity.0.0 = (move_towards * distance * 8.0).clamp(-max, max);
+}
+
+fn roll_cup_towards_center(
+    input: Res<ButtonInput<KeyCode>>,
+    ground: Single<&GlobalTransform, With<Ground>>,
+    mut angular_velocity: Single<(&mut AngularVelocity, &Transform), With<Cup>>,
+) {
+    let center = ground.translation();
+    let direction = (center - angular_velocity.1.translation).normalize();
+    let target_up = if input.pressed(KeyCode::KeyR) {
+        direction
+    } else {
+        Vec3::Y
+    };
+
+    **angular_velocity.0 =
+        Quat::from_rotation_arc(*angular_velocity.1.up(), target_up).to_scaled_axis() * 4.0;
 }
 
 // TODO compare with: https://docs.rs/avian3d/latest/avian3d/collision/collider/struct.ColliderConstructorHierarchy.html
