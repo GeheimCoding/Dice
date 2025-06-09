@@ -22,6 +22,19 @@ struct Cup;
 #[derive(Component)]
 struct Ground;
 
+#[derive(Component)]
+struct Counted;
+
+#[derive(Component, Default)]
+struct AutoSleep {
+    translation: Vec3,
+    rotation: Vec3,
+    time: f32,
+}
+
+#[derive(Resource)]
+struct CountDie(bool);
+
 #[derive(Resource)]
 struct D6 {
     mesh: Handle<Mesh>,
@@ -47,6 +60,7 @@ fn main() {
             },
             WorldInspectorPlugin::default().run_if(input_toggle_active(false, KeyCode::Escape)),
         ))
+        .insert_resource(CountDie(false))
         //.insert_resource(DeactivationTime(0.2))
         .insert_resource(PointLightShadowMap { size: 2048 })
         .add_systems(Startup, (setup, spawn_cube).chain())
@@ -55,11 +69,12 @@ fn main() {
             Update,
             (
                 spin,
+                count_faces,
+                detect_sleep,
                 move_cup_with_mouse,
                 move_cup_vertically,
                 roll_cup_towards_center,
                 spawn_cube.run_if(input_just_pressed(KeyCode::Enter)),
-                count_faces.run_if(input_just_pressed(KeyCode::KeyC)),
                 clear_dice.run_if(input_just_pressed(KeyCode::Backspace)),
             ),
         )
@@ -163,6 +178,7 @@ fn spawn_cube(
     );
     commands.spawn((
         Die,
+        AutoSleep::default(),
         Spinnable(spin * 800.0),
         RigidBody::Dynamic,
         GravityScale(20.0),
@@ -184,15 +200,26 @@ fn spawn_cube(
     ));
 }
 
-fn clear_dice(mut commands: Commands, query: Query<Entity, With<Die>>) {
+fn clear_dice(
+    mut commands: Commands,
+    query: Query<Entity, With<Die>>,
+    mut count_die: ResMut<CountDie>,
+) {
+    count_die.0 = false;
     for entity in query.iter() {
         commands.entity(entity).despawn();
     }
 }
 
-fn count_faces(query: Query<&Transform, With<Die>>) {
-    let mut total_count = 0;
-    for transform in query.iter() {
+fn count_faces(
+    mut commands: Commands,
+    count_die: Res<CountDie>,
+    query: Query<(Entity, &Transform), (With<Die>, Added<Sleeping>, Without<Counted>)>,
+) {
+    if !count_die.0 {
+        return;
+    }
+    for (entity, transform) in query.iter() {
         let sides = vec![
             (transform.left(), 2),
             (transform.right(), 5),
@@ -207,10 +234,10 @@ fn count_faces(query: Query<&Transform, With<Die>>) {
                 .partial_cmp(&rhs.0.dot(Vec3::Y))
                 .expect("comparable")
         }) {
-            total_count += face;
+            info!("{face}")
         }
+        commands.entity(entity).insert(Counted);
     }
-    info!("{total_count}");
 }
 
 fn move_cup_vertically(
@@ -257,6 +284,7 @@ fn move_cup_with_mouse(
 }
 
 fn roll_cup_towards_center(
+    mut count_die: ResMut<CountDie>,
     input: Res<ButtonInput<KeyCode>>,
     ground: Single<&GlobalTransform, With<Ground>>,
     mut angular_velocity: Single<(&mut AngularVelocity, &Transform), With<Cup>>,
@@ -264,6 +292,7 @@ fn roll_cup_towards_center(
     let center = ground.translation();
     let direction = (center - angular_velocity.1.translation).normalize();
     let target_up = if input.pressed(KeyCode::KeyR) {
+        count_die.0 = true;
         direction
     } else {
         Vec3::Y
@@ -271,6 +300,34 @@ fn roll_cup_towards_center(
 
     **angular_velocity.0 =
         Quat::from_rotation_arc(*angular_velocity.1.up(), target_up).to_scaled_axis() * 4.0;
+}
+
+fn detect_sleep(
+    mut commands: Commands,
+    mut query: Query<(Entity, &Transform, &mut AutoSleep, &GravityScale), Without<Sleeping>>,
+    time: Res<Time>,
+) {
+    for (entity, transform, mut auto_sleep, gravity_scale) in query.iter_mut() {
+        let translation = transform.translation;
+        let rotation = transform.rotation.to_scaled_axis();
+        let changed = (auto_sleep.translation - translation).length()
+            + (auto_sleep.rotation - rotation).length();
+        if changed > 0.1 {
+            commands.entity(entity).insert(GravityScale(20.0));
+            auto_sleep.translation = translation;
+            auto_sleep.rotation = rotation;
+            auto_sleep.time = 0.0;
+        } else {
+            auto_sleep.time += time.delta_secs();
+        }
+        if auto_sleep.time > 0.5 {
+            //info!("auto sleeping for {entity}");
+            commands.entity(entity).insert(Sleeping);
+            if gravity_scale.0 != 1.0 {
+                commands.entity(entity).insert(GravityScale(1.0));
+            }
+        }
+    }
 }
 
 // TODO compare with: https://docs.rs/avian3d/latest/avian3d/collision/collider/struct.ColliderConstructorHierarchy.html
