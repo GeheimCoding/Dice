@@ -32,6 +32,11 @@ struct AutoSleep {
     time: f32,
 }
 
+#[derive(Component)]
+struct Roll {
+    faces: Vec<u8>,
+}
+
 #[derive(Resource)]
 struct CountDie(bool);
 
@@ -61,7 +66,7 @@ fn main() {
             WorldInspectorPlugin::default().run_if(input_toggle_active(false, KeyCode::Escape)),
         ))
         .insert_resource(CountDie(false))
-        //.insert_resource(DeactivationTime(0.2))
+        .insert_resource(DeactivationTime(0.2))
         .insert_resource(PointLightShadowMap { size: 2048 })
         .add_systems(Startup, (setup, spawn_cube).chain())
         .add_systems(PreUpdate, handle_asset_events)
@@ -72,7 +77,6 @@ fn main() {
                 count_faces,
                 detect_sleep,
                 move_cup_with_mouse,
-                move_cup_vertically,
                 roll_cup_towards_center,
                 spawn_cube.run_if(input_just_pressed(KeyCode::Enter)),
                 clear_dice.run_if(input_just_pressed(KeyCode::Backspace)),
@@ -134,6 +138,23 @@ fn setup(
         RigidBody::Kinematic,
         Name::new("Cup"),
         Transform::from_translation(Vec3::new(2.0, 1.2, 0.0)),
+    ));
+
+    commands.spawn((
+        Roll { faces: vec![] },
+        Text::new("Roll:"),
+        TextFont {
+            font_size: 80.0,
+            ..default()
+        },
+        TextColor(Color::WHITE),
+        TextLayout::new_with_justify(JustifyText::Center),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(5.0),
+            left: Val::Px(20.0),
+            ..default()
+        },
     ));
 }
 
@@ -202,10 +223,13 @@ fn spawn_cube(
 
 fn clear_dice(
     mut commands: Commands,
+    mut roll: Single<(&mut Roll, &mut Text)>,
     query: Query<Entity, With<Die>>,
     mut count_die: ResMut<CountDie>,
 ) {
     count_die.0 = false;
+    roll.0.faces.clear();
+    roll.1.0 = String::from("Roll:");
     for entity in query.iter() {
         commands.entity(entity).despawn();
     }
@@ -214,6 +238,7 @@ fn clear_dice(
 fn count_faces(
     mut commands: Commands,
     count_die: Res<CountDie>,
+    mut roll: Single<(&mut Roll, &mut Text)>,
     query: Query<(Entity, &Transform), (With<Die>, Added<Sleeping>, Without<Counted>)>,
 ) {
     if !count_die.0 {
@@ -234,33 +259,31 @@ fn count_faces(
                 .partial_cmp(&rhs.0.dot(Vec3::Y))
                 .expect("comparable")
         }) {
-            info!("{face}")
+            roll.0.faces.push(*face);
+            //roll.0.faces.sort();
+            roll.1.0 = format!(
+                "Roll: {}",
+                roll.0
+                    .faces
+                    .iter()
+                    .map(|face| face.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" + ")
+            );
         }
         commands.entity(entity).insert(Counted);
     }
 }
 
-fn move_cup_vertically(
-    mut linear_velocity: Single<&mut LinearVelocity, With<Cup>>,
-    input: Res<ButtonInput<MouseButton>>,
-    time: Res<Time>,
-) {
-    let movement_speed = 400.0 * time.delta_secs();
-    if input.pressed(MouseButton::Right) {
-        linear_velocity.y -= movement_speed;
-    }
-    if input.pressed(MouseButton::Left) {
-        linear_velocity.y += movement_speed;
-    }
-}
-
 fn move_cup_with_mouse(
+    time: Res<Time>,
     window: Single<&Window>,
+    input: Res<ButtonInput<MouseButton>>,
     camera: Single<(&Camera, &GlobalTransform)>,
     ground: Single<&GlobalTransform, With<Ground>>,
     mut linear_velocity: Single<(&mut LinearVelocity, &Transform), With<Cup>>,
 ) {
-    linear_velocity.0.0 = Vec3::ZERO;
+    let movement_speed = 400.0 * time.delta_secs();
     let (camera, camera_transform) = *camera;
     let Some(cursor) = window.cursor_position() else {
         return;
@@ -281,6 +304,13 @@ fn move_cup_with_mouse(
     let move_towards = target_point - translation;
     let distance = translation.distance(target_point);
     linear_velocity.0.0 = (move_towards * distance * 8.0).clamp(-max, max);
+
+    if input.pressed(MouseButton::Right) {
+        linear_velocity.0.0.y -= movement_speed;
+    }
+    if input.pressed(MouseButton::Left) {
+        linear_velocity.0.0.y += movement_speed;
+    }
 }
 
 fn roll_cup_towards_center(
@@ -304,6 +334,7 @@ fn roll_cup_towards_center(
 
 fn detect_sleep(
     mut commands: Commands,
+    deactivation_time: Res<DeactivationTime>,
     mut query: Query<(Entity, &Transform, &mut AutoSleep, &GravityScale), Without<Sleeping>>,
     time: Res<Time>,
 ) {
@@ -320,7 +351,7 @@ fn detect_sleep(
         } else {
             auto_sleep.time += time.delta_secs();
         }
-        if auto_sleep.time > 0.5 {
+        if auto_sleep.time > deactivation_time.0 {
             //info!("auto sleeping for {entity}");
             commands.entity(entity).insert(Sleeping);
             if gravity_scale.0 != 1.0 {
