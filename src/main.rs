@@ -69,7 +69,8 @@ fn main() {
         .insert_resource(DeactivationTime(0.2))
         .insert_resource(PointLightShadowMap { size: 2048 })
         .add_systems(Startup, (setup, spawn_cube).chain())
-        .add_systems(PostUpdate, handle_asset_events)
+        // scene spawning happens between Update and PostUpdate
+        .add_systems(PostUpdate, (handle_asset_events, despawn_fallen_dice))
         .add_systems(
             Update,
             (
@@ -203,6 +204,7 @@ fn spawn_cube(
         Spinnable(spin * 800.0),
         RigidBody::Dynamic,
         GravityScale(20.0),
+        // this causes the dice to clip outside the cup, which looks awful
         //TransformInterpolation,
         Restitution::new(0.4),
         AngularVelocity(angular_velocity * 8.0),
@@ -357,6 +359,14 @@ fn detect_sleep(
             if gravity_scale.0 != 1.0 {
                 commands.entity(entity).insert(GravityScale(1.0));
             }
+        }
+    }
+}
+
+fn despawn_fallen_dice(mut commands: Commands, query: Query<(Entity, &Transform), With<Die>>) {
+    for (die, transform) in query.iter() {
+        if transform.translation.y < -100.0 {
+            commands.entity(die).despawn();
         }
     }
 }
