@@ -69,7 +69,7 @@ fn main() {
         .insert_resource(DeactivationTime(0.2))
         .insert_resource(PointLightShadowMap { size: 2048 })
         .add_systems(Startup, (setup, spawn_cube).chain())
-        .add_systems(PreUpdate, handle_asset_events)
+        .add_systems(PostUpdate, handle_asset_events)
         .add_systems(
             Update,
             (
@@ -131,7 +131,7 @@ fn setup(
         Transform::from_xyz(-2.5, 7.0, 13.0).looking_at(Vec3::ZERO, Dir3::Y),
     ));
 
-    let cup = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Cup.glb#Scene0"));
+    let cup = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Cup mit col.glb"));
     commands.spawn((
         Cup,
         SceneRoot(cup),
@@ -144,7 +144,7 @@ fn setup(
         Roll { faces: vec![] },
         Text::new("Roll:"),
         TextFont {
-            font_size: 80.0,
+            font_size: 60.0,
             ..default()
         },
         TextColor(Color::WHITE),
@@ -203,7 +203,7 @@ fn spawn_cube(
         Spinnable(spin * 800.0),
         RigidBody::Dynamic,
         GravityScale(20.0),
-        TransformInterpolation,
+        //TransformInterpolation,
         Restitution::new(0.4),
         AngularVelocity(angular_velocity * 8.0),
         Mesh3d(d6.mesh.clone()),
@@ -365,35 +365,45 @@ fn detect_sleep(
 fn handle_asset_events(
     mut commands: Commands,
     query: Query<(Entity, &SceneRoot), With<RigidBody>>,
+    children: Query<&Children>,
+    mesh_query: Query<(&Mesh3d, &Name)>,
     mut events: EventReader<AssetEvent<Scene>>,
-    mut scenes: ResMut<Assets<Scene>>,
     meshes: Res<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for event in events.read() {
         if let AssetEvent::LoadedWithDependencies { id } = event {
             for (entity, scene_root) in query.iter() {
                 if scene_root.0.id() == *id {
-                    let scene = scenes.get_mut(*id).expect("scene");
-                    let mut query = scene.world.query::<(&Mesh3d, Option<&Name>)>();
-                    for (mesh, name) in query.iter(&mut scene.world) {
-                        info!("{:?}", name);
-                        if let Some(name) = name {
-                            if !name.starts_with("Cylinder") {
-                                continue;
-                            }
+                    for entity in children.iter_descendants(entity) {
+                        let Ok((mesh, name)) = mesh_query.get(entity) else {
+                            continue;
+                        };
+                        //info!("{:?}", name);
+                        if name.starts_with("Cube") {
+                            commands.entity(entity).insert(Visibility::Hidden);
                         } else {
+                            commands.entity(entity).insert(MeshMaterial3d(materials.add(
+                                StandardMaterial {
+                                    base_color: Color::srgba(1.0, 1.0, 1.0, 0.5),
+                                    alpha_mode: AlphaMode::Add,
+                                    ..default()
+                                },
+                            )));
+                        }
+                        if !name.starts_with("Cylinder.001") {
                             continue;
                         }
+                        commands.entity(entity).insert(Visibility::Hidden);
                         let mesh = meshes.get(mesh.0.id()).expect("mesh");
                         let collider = Collider::convex_decomposition_from_mesh_with_config(
                             mesh,
                             &VhacdParameters {
-                                concavity: 0.0,
-                                convex_hull_approximation: false,
+                                fill_mode: FillMode::SurfaceOnly,
                                 ..default()
                             },
                         )
-                        .expect("convex decomposition");
+                        .expect("collider");
                         commands.entity(entity).with_child(collider);
                     }
                 }
