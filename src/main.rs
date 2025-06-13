@@ -1,7 +1,9 @@
 mod geometry;
 
 use crate::geometry::create_d6;
+use avian3d::math::Vector;
 use avian3d::prelude::*;
+use bevy::color::palettes::css::{ORANGE, RED};
 use bevy::image::ImageLoaderSettings;
 use bevy::input::common_conditions::{input_just_pressed, input_toggle_active};
 use bevy::pbr::PointLightShadowMap;
@@ -24,6 +26,12 @@ struct Ground;
 
 #[derive(Component)]
 struct Counted;
+
+#[derive(Component)]
+struct Cursor;
+
+#[derive(Resource)]
+struct DebugRenderEnabled(bool);
 
 #[derive(Component, Default)]
 struct AutoSleep {
@@ -66,21 +74,38 @@ fn main() {
             },
             WorldInspectorPlugin::default().run_if(input_toggle_active(false, KeyCode::Escape)),
         ))
+        .insert_gizmo_config(
+            PhysicsGizmos::default(),
+            GizmoConfig {
+                enabled: false,
+                ..default()
+            },
+        )
+        .insert_resource(DebugRenderEnabled(false))
         .insert_resource(CountDie(false))
         //.insert_resource(DeactivationTime(0.2))
         .insert_resource(PointLightShadowMap { size: 2048 })
         .add_systems(Startup, (setup, spawn_cube).chain())
-        // scene spawning happens between Update and PostUpdate
-        .add_systems(PostUpdate, (handle_asset_events, despawn_fallen_dice))
         .add_systems(
             Update,
             (
                 spin,
                 count_faces,
                 detect_sleep,
+                position_cursor,
                 move_cup_with_mouse,
+                highlight_selected_die,
                 roll_cup_towards_center,
                 spawn_cube.run_if(input_just_pressed(KeyCode::Enter)),
+                toggle_debug_render.run_if(input_just_pressed(KeyCode::Escape)),
+            ),
+        )
+        .add_systems(
+            PostUpdate,
+            (
+                // scene spawning happens between Update and PostUpdate
+                handle_asset_events,
+                despawn_fallen_dice,
                 clear_dice.run_if(input_just_pressed(KeyCode::Backspace)),
             ),
         )
@@ -127,11 +152,8 @@ fn setup(
         },
         Transform::from_xyz(0.0, 10.0, 8.0),
     ));
-    commands.spawn((
-        Msaa::Sample8,
-        Camera3d::default(),
-        Transform::from_xyz(-2.5, 7.0, 13.0).looking_at(Vec3::ZERO, Dir3::Y),
-    ));
+    let camera_transform = Transform::from_xyz(-2.5, 7.0, 13.0).looking_at(Vec3::ZERO, Dir3::Y);
+    commands.spawn((Msaa::Sample8, Camera3d::default(), camera_transform.clone()));
 
     let cup = asset_server.load(GltfAssetLabel::Scene(0).from_asset("Cup mit col.glb"));
     commands.spawn((
@@ -157,6 +179,10 @@ fn setup(
             left: Val::Px(20.0),
             ..default()
         },
+    ));
+    commands.spawn((
+        Cursor,
+        RayCaster::new(camera_transform.translation, camera_transform.forward()),
     ));
 }
 
@@ -376,6 +402,65 @@ fn despawn_fallen_dice(mut commands: Commands, query: Query<(Entity, &Transform)
             commands.entity(die).despawn();
         }
     }
+}
+
+fn position_cursor(
+    mut query: Query<&mut RayCaster, With<Cursor>>,
+    window: Single<&Window>,
+    camera: Single<(&Camera, &GlobalTransform)>,
+) {
+    let (camera, camera_transform) = *camera;
+    let Some(cursor) = window.cursor_position() else {
+        return;
+    };
+    let Ok(ray) = camera.viewport_to_world(camera_transform, cursor) else {
+        return;
+    };
+    let mut cursor = query.single_mut().expect("cursor");
+    cursor.origin = ray.origin;
+    cursor.direction = ray.direction;
+}
+
+fn highlight_selected_die(
+    dice: Query<&MeshMaterial3d<StandardMaterial>, With<Die>>,
+    cursor: Query<(&RayCaster, &RayHits), With<Cursor>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for mesh_material in dice.iter() {
+        let mesh_material = materials.get_mut(mesh_material).expect("mesh_material");
+        mesh_material.base_color = Color::default();
+    }
+    for (_ray, hits) in cursor.iter() {
+        for hit in hits.iter_sorted() {
+            if let Ok(mesh_material) = dice.get(hit.entity) {
+                let mesh_material = materials.get_mut(mesh_material).expect("mesh_material");
+                mesh_material.base_color = Color::srgb(0.0, 0.8, 0.8);
+            }
+            break;
+        }
+    }
+}
+
+fn toggle_debug_render(
+    mut gizmo_config: ResMut<GizmoConfigStore>,
+    mut flag: ResMut<DebugRenderEnabled>,
+) {
+    flag.0 = !flag.0;
+    gizmo_config.insert(
+        GizmoConfig {
+            enabled: flag.0,
+            ..default()
+        },
+        PhysicsGizmos {
+            contact_point_color: Some(RED.into()),
+            axis_lengths: Some(Vector::new(0.5, 0.5, 0.5)),
+            aabb_color: Some(Color::srgb(0.8, 0.8, 0.8)),
+            collider_color: Some(ORANGE.into()),
+            sleeping_color_multiplier: Some([1.0, 1.0, 0.4, 1.0]),
+            hide_meshes: true,
+            ..default()
+        },
+    );
 }
 
 // TODO compare with: https://docs.rs/avian3d/latest/avian3d/collision/collider/struct.ColliderConstructorHierarchy.html
