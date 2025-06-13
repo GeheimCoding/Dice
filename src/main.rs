@@ -60,13 +60,14 @@ fn main() {
                 ..default()
             }),
             PhysicsPlugins::default(),
+            PhysicsDebugPlugin::default(),
             EguiPlugin {
                 enable_multipass_for_primary_context: true,
             },
             WorldInspectorPlugin::default().run_if(input_toggle_active(false, KeyCode::Escape)),
         ))
         .insert_resource(CountDie(false))
-        .insert_resource(DeactivationTime(0.2))
+        //.insert_resource(DeactivationTime(0.2))
         .insert_resource(PointLightShadowMap { size: 2048 })
         .add_systems(Startup, (setup, spawn_cube).chain())
         // scene spawning happens between Update and PostUpdate
@@ -346,7 +347,11 @@ fn detect_sleep(
         let changed = (auto_sleep.translation - translation).length()
             + (auto_sleep.rotation - rotation).length();
         if changed > 0.1 {
-            commands.entity(entity).insert(GravityScale(20.0));
+            if gravity_scale.0 != 20.0 {
+                commands.entity(entity).insert(GravityScale(20.0));
+                commands.entity(entity).insert(LinearDamping::default());
+                commands.entity(entity).insert(AngularDamping::default());
+            }
             auto_sleep.translation = translation;
             auto_sleep.rotation = rotation;
             auto_sleep.time = 0.0;
@@ -358,6 +363,8 @@ fn detect_sleep(
             commands.entity(entity).insert(Sleeping);
             if gravity_scale.0 != 1.0 {
                 commands.entity(entity).insert(GravityScale(1.0));
+                commands.entity(entity).insert(LinearDamping(100000.0));
+                commands.entity(entity).insert(AngularDamping(100000.0));
             }
         }
     }
